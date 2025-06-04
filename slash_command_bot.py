@@ -47,7 +47,7 @@ class ClashBot(commands.Cog):
             async with session.get(url, headers=headers) as response:
                 if response.status != 200:
                     logger.error("Failed to fetch clan data: HTTP %d", response.status)
-                    await interaction.response.send_message(f"Error fetching clan data: {response.status}")
+                    await interaction.followup.send(f"Error fetching clan data: {response.status}")
                     return
                 data = await response.json()
 
@@ -99,7 +99,7 @@ class ClashBot(commands.Cog):
             async with session.get(league_url, headers=headers) as resp:
                 if resp.status != 200:
                     logger.error("Failed to fetch CWL group data. Status: %s", resp.status)
-                    await interaction.response.send_message(f"Failed to fetch CWL group data. Status: {resp.status}")
+                    await interaction.followup.send(f"Failed to fetch CWL group data. Status: {resp.status}")
                     return
                 group_data = await resp.json()
                 logger.info("Fetched CWL league group data")
@@ -129,7 +129,7 @@ class ClashBot(commands.Cog):
 
             if not active_war_data:
                 logger.warning("No active CWL war found")
-                await interaction.response.send_message("No active CWL war found.")
+                await interaction.followup.send("No active CWL war found.")
                 return
 
             clan_name = active_war_data["clan"]["name"]
@@ -142,10 +142,19 @@ class ClashBot(commands.Cog):
             
             embed = discord.Embed(
                 title=f"CWL War: {clan_name} **{clan_stars}⭐ ({clan_destruction}%)** vs {opponent_name} **{opponent_stars}⭐({opponent_destruction}%)**",
-                description=f"__**War End Time:** <t:{war_end_time}:F> • <t:{war_end_time}:R>__\n\n",
+                description=f"**War End Time:** <t:{war_end_time}:F> • __<t:{war_end_time}:R>__\n\n",
                 color=discord.Color.dark_gold()
             )
             
+            total_members = len(active_war_data["clan"].get("members", []))
+            attacks_made = sum(1 for member in active_war_data["clan"]["members"] if "attacks" in member and member["attacks"])
+            attacks_left = total_members - attacks_made
+            
+            embed.add_field(
+                name="🗡️ Attacks Remaining",
+                value=f"{attacks_left} / {total_members}",
+                inline=False
+)
             # Sort opponent members by mapPosition descending
             opponent_members = [
                 m for m in active_war_data["opponent"]["members"]
@@ -162,27 +171,27 @@ class ClashBot(commands.Cog):
             }
                         
             # Step 3: Build attack summary with mapped defenders
+            all_attacks = []
             for member in active_war_data["clan"].get("members", []):
                 name = member.get("name", "Unknown")
-                attacks = member.get("attacks", [])
+                attacks = member.get("attacks",[])
 
                 if not attacks:
-                    embed.add_field(name=name, value="❌ ATTACK BUM", inline=False)
+                    embed.add_field(name=name, value="❌ Has not attacked yet", inline=False)
                     continue
-
-                total_stars = sum(attack.get("stars", 0) for attack in attacks)
-                attack_lines = []
-
-                for attack in attacks:
-                    stars = attack.get("stars", 0)
-                    duration = attack.get("duration", 0)
-                    defender_tag = attack.get("defenderTag", "")
-                    destruction_percent = attack.get("destructionPercentage", 0)
-                    opp_name, opp_rank = opponent_map.get(defender_tag, ("Unknown", "??"))
-                    attack_lines.append(f"{'⭐' * stars} {stars} stars [{destruction_percent}%] on {opp_name} (#{opp_rank})")
-
-                attack_summary = "\n".join(attack_lines)
-                value = f"{attack_summary}"
+                
+                attacks[0]["name"] = name
+                all_attacks.append(attacks[0])
+            
+            sorted_attacks = sorted(all_attacks, key=lambda a: (a["stars"],a["destructionPercentage"]), reverse=True)
+            
+            for attack in sorted_attacks:
+                name = attack.get("name","Unknown")
+                stars = attack.get("stars", 0)
+                defender_tag = attack.get("defenderTag", "")
+                destruction_percent = attack.get("destructionPercentage", 0)
+                opp_name, opp_rank = opponent_map.get(defender_tag, ("Unknown", "??"))
+                value = f"{'⭐' * stars} {stars} Stars [{destruction_percent}%] on {opp_name} (#{opp_rank})\n"
                 embed.add_field(name=name, value=value, inline=False)
 
             await interaction.followup.send(embed=embed)
@@ -285,6 +294,95 @@ class ClashBot(commands.Cog):
         except Exception as e:
             logger.exception("Exception in /cwlattacks command:")
             await interaction.followup.send("An unexpected error occurred while processing the command.")
+
+    @app_commands.command(name="cwlstandings", description="Displays current standings of all clans in the CWL group")
+    async def cwlstandings(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        base_url = "https://api.clashofclans.com/v1"
+        league_url = f"{base_url}/clans/{encoded_clan_tag}/currentwar/leaguegroup"
+        headers = {"Authorization": f"Bearer {COC_API_TOKEN}"}
+
+        async with aiohttp.ClientSession() as session:
+            # Fetch league group
+            async with session.get(league_url, headers=headers) as response:
+                if response.status != 200:
+                    await interaction.followup.send("Failed to fetch CWL group data.")
+                    return
+                group_data = await response.json()
+
+            clan_stats = {clan["tag"]: {
+                "name": clan["name"],
+                "stars": 0,
+                "destruction": 0,
+                "wins": 0,
+                "losses": 0,
+                "battles": 0
+            } for clan in group_data.get("clans", [])}
+
+            # Go through rounds and wars
+            for round_data in group_data.get("rounds", []):
+                for war_tag in round_data.get("warTags", []):
+                    if war_tag == "#0":
+                        continue
+                    encoded_tag = urllib.parse.quote(war_tag)
+                    war_url = f"{base_url}/clanwarleagues/wars/{encoded_tag}"
+
+                    async with session.get(war_url, headers=headers) as war_resp:
+                        if war_resp.status != 200:
+                            continue
+                        war_data = await war_resp.json()
+
+                        for side in ["clan", "opponent"]:
+                            tag = war_data[side]["tag"]
+                            if tag in clan_stats:
+                                stats = clan_stats[tag]
+                                stats["stars"] += war_data[side].get("stars", 0)
+                                stats["destruction"] += war_data[side].get("destructionPercentage", 0)
+                                if war_data.get("state") == "warEnded":
+                                    stats["battles"] += 1
+                                    
+                        if war_data.get("state") != "warEnded":
+                            continue
+
+                        # Determine winner
+                        clan = war_data["clan"]
+                        opp = war_data["opponent"]
+                        if clan["stars"] > opp["stars"] or (
+                            clan["stars"] == opp["stars"] and clan["destructionPercentage"] > opp["destructionPercentage"]
+                        ):
+                            clan_stats[clan["tag"]]["wins"] += 1
+                            clan_stats[opp["tag"]]["losses"] += 1
+                        else:
+                            clan_stats[opp["tag"]]["wins"] += 1
+                            clan_stats[clan["tag"]]["losses"] += 1
+
+        # Calculate average destruction and sort
+        for stats in clan_stats.values():
+            if stats["battles"] > 0:
+                stats["destruction"] = round(stats["destruction"] / stats["battles"], 2)
+            else:
+                stats["destruction"] = 0
+
+        sorted_clans = sorted(clan_stats.values(), key=lambda c: (c["wins"], c["stars"], c["destruction"]), reverse=True)
+
+        embed = discord.Embed(
+            title="🏆 CWL Standings",
+            description="Current League Rankings",
+            color=discord.Color.blue()
+        )
+
+        for i, clan in enumerate(sorted_clans, 1):
+            embed.add_field(
+                name=f"{i}. {clan['name']}",
+                value=(
+                    f"✅ Wins: {clan['wins']} | ❌ Losses: {clan['losses']} | 🔄 Wars: {clan['battles']}\n"
+                    f"⭐ Stars: {clan['stars']} | 💥 Destruction: {clan['destruction']}%"
+                ),
+                inline=False
+            )
+        
+        await interaction.followup.send(embed=embed)
 
 def parse_sc_time(sc_time: str):
     return datetime.strptime(sc_time, "%Y%m%dT%H%M%S.%fZ")
