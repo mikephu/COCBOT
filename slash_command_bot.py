@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import urllib.parse
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -338,7 +338,9 @@ class ClashBot(commands.Cog):
                             if tag in clan_stats:
                                 stats = clan_stats[tag]
                                 stats["stars"] += war_data[side].get("stars", 0)
-                                stats["destruction"] += war_data[side].get("destructionPercentage", 0)
+                                for member in war_data[side].get("members", []):
+                                    for attack in member.get("attacks", []):
+                                        stats["destruction"] += attack.get("destructionPercentage", 0)
                                 if war_data.get("state") == "warEnded":
                                     stats["battles"] += 1
                                     
@@ -357,33 +359,29 @@ class ClashBot(commands.Cog):
                             clan_stats[opp["tag"]]["wins"] += 1
                             clan_stats[clan["tag"]]["losses"] += 1
 
-        # Calculate average destruction and sort
-        for stats in clan_stats.values():
-            if stats["battles"] > 0:
-                stats["destruction"] = round(stats["destruction"] / stats["battles"], 2)
-            else:
-                stats["destruction"] = 0
+            # Calculate average destruction and sort
+            stats["destruction"] = round(stats["destruction"], 2)
 
-        sorted_clans = sorted(clan_stats.values(), key=lambda c: (c["wins"], c["stars"], c["destruction"]), reverse=True)
+            sorted_clans = sorted(clan_stats.values(), key=lambda c: (c["wins"], c["stars"], c["destruction"]), reverse=True)
 
-        embed = discord.Embed(
-            title="🏆 CWL Standings",
-            description="Current League Rankings",
-            color=discord.Color.blue()
-        )
-
-        for i, clan in enumerate(sorted_clans, 1):
-            embed.add_field(
-                name=f"{i}. {clan['name']}",
-                value=(
-                    f"✅ Wins: {clan['wins']} | ❌ Losses: {clan['losses']} | 🔄 Wars: {clan['battles']}\n"
-                    f"⭐ Stars: {clan['stars']} | 💥 Destruction: {clan['destruction']}%"
-                ),
-                inline=False
+            embed = discord.Embed(
+                title="🏆 CWL Standings",
+                description="Current League Rankings",
+                color=discord.Color.blue()
             )
-        
-        await interaction.followup.send(embed=embed)
 
+            for i, clan in enumerate(sorted_clans, 1):
+                embed.add_field(
+                    name=f"{i}. {clan['name']}",
+                    value=(
+                        f"✅ Wins: {clan['wins']} | ❌ Losses: {clan['losses']} | 🔄 Wars: {clan['battles']}\n"
+                        f"⭐ Stars: {clan['stars']} | 💥 Destruction: {clan['destruction']}%"
+                    ),
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed)
+    
 def parse_sc_time(sc_time: str):
     return datetime.strptime(sc_time, "%Y%m%dT%H%M%S.%fZ")
 
