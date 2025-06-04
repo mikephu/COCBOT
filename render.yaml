@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: cocbot
+    runtime: python
+    buildCommand: ""
+    startCommand: python main.py
