@@ -124,7 +124,8 @@ async def cwlattacks(ctx):
                 if war_data.get("state") == "inWar":
                     active_war_tags = round
                     break
-
+                
+        # Step 4: fetch active war data 
         active_war_data = []
         for round in active_war_tags:
             war_tag = urllib.parse.quote(round)
@@ -137,7 +138,7 @@ async def cwlattacks(ctx):
                 active_war_data.append(war_data)
         
         
-        # Step 4: Find our clan
+        # Step 5: Find our clan
         our_clan = None
         enemy_clan = None
         for active_war in active_war_data:
@@ -151,7 +152,7 @@ async def cwlattacks(ctx):
             if our_clan:
                 break
             
-        # Step 5: Process attack info
+        # Step 6: Process attack info
         attacked = []
         not_attacked = []
 
@@ -163,7 +164,7 @@ async def cwlattacks(ctx):
             else:
                 not_attacked.append(name)
 
-        # Step 6: Send embed
+        # Step 7: Send embed
         embed = discord.Embed(
             title=f"CWL Attacks - {our_clan['name']} vs {enemy_clan['name']}",
             color=discord.Color.red()
